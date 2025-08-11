@@ -4,20 +4,25 @@ from pathlib import Path
 from datetime import datetime
 from flask import Flask, send_from_directory, Response, jsonify, abort, stream_with_context
 
-# === Rutas base (relativas, sin absolutos) ===
-BASE_DIR   = Path(__file__).resolve().parents[1]   # raíz del repo
+# === Rutas base (relativas) ===
+BASE_DIR   = Path(__file__).resolve().parents[1]
 PUBLIC_DIR = BASE_DIR / "public"
-PARTS_DIR  = BASE_DIR / "server" / "parts"         # 10 TXT con base64 dentro de comillas triples
+PARTS_DIR  = BASE_DIR / "server" / "parts"
 
-# === Partes/Nombres ===
+# === Config payload ===
 PARTS_COUNT     = 10
 PART_PREFIX     = "payload_encoded_part_"
 PART_SUFFIX     = ".txt"
 FINAL_ZIP_NAME  = "anabel_y_marco_completo.zip"
 XOR_KEY         = 123  # clave XOR inversa
 
+# Trozos: chars de Base64 a procesar por iteración (múltiplos de 4)
+B64_CHUNK_CHARS = 256 * 1024  # 256 KiB de texto base64
+# Nota: el binario emitido por iteración será ~192 KiB aprox.
+
 app = Flask(__name__, static_folder=None)
 
+# -------- Utilidades --------
 def ensure_dirs():
     PARTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -27,11 +32,23 @@ def parts_exist() -> bool:
             return False
     return True
 
-def read_all_parts_b64() -> str:
+def _extract_b64_block(text: str) -> str:
     """
-    Lee los 10 TXT y concatena SOLO lo entre comillas triples:
+    Extrae SOLO el contenido entre comillas triples:
       ''' ... '''  o  \"\"\" ... \"\"\"
-    Luego elimina todo whitespace para dejar Base64 limpio.
+    Si no hay comillas, devuelve el texto completo.
+    Elimina whitespace para dejar base64 limpio.
+    """
+    triple_pat = re.compile(r"'''(.*?)'''|\"\"\"(.*?)\"\"\"", re.DOTALL)
+    m = triple_pat.search(text)
+    payload = (m.group(1) or m.group(2)) if m else text
+    return re.sub(r"\s+", "", payload)
+
+def iter_b64_decoded_bytes():
+    """
+    Lee los 10 TXT secuencialmente y decodifica Base64 en streaming,
+    manejando el 'carry' para que cada decode sea múltiplo de 4.
+    Rinde bytes ya decodificados (AÚN sin XOR).
     """
     ensure_dirs()
     if not parts_exist():
@@ -39,39 +56,45 @@ def read_all_parts_b64() -> str:
                    if not (PARTS_DIR / f"{PART_PREFIX}{i}{PART_SUFFIX}").exists()]
         raise FileNotFoundError(f"Faltan partes: {missing}")
 
-    triple_pat = re.compile(r"'''(.*?)'''|\"\"\"(.*?)\"\"\"", re.DOTALL)
-    chunks = []
+    carry = ""  # restos de chars base64 que no forman múltiplo de 4
     for i in range(1, PARTS_COUNT + 1):
         p = PARTS_DIR / f"{PART_PREFIX}{i}{PART_SUFFIX}"
         text = p.read_text(encoding="utf-8", errors="ignore")
-        matches = triple_pat.findall(text)
-        if matches:
-            # matches = lista de tuplas (m1, m2); tomamos el no vacío
-            for m1, m2 in matches:
-                chunks.append(m1 if m1 else m2)
-        else:
-            # si no vienen con comillas triples, usamos todo
-            chunks.append(text)
-    joined = "".join(chunks)
-    joined = re.sub(r"\s+", "", joined)  # quitar espacios/saltos
-    return joined
+        payload = _extract_b64_block(text)
+
+        pos = 0
+        L = len(payload)
+        while pos < L:
+            chunk = payload[pos:pos + B64_CHUNK_CHARS]
+            pos += B64_CHUNK_CHARS
+
+            buf = carry + chunk
+            usable_len = (len(buf) // 4) * 4   # mayor múltiplo de 4
+            if usable_len:
+                to_decode = buf[:usable_len]
+                carry     = buf[usable_len:]
+                try:
+                    yield base64.b64decode(to_decode, validate=False)
+                except Exception as e:
+                    raise RuntimeError(f"Error Base64 en parte {i}: {e}")
+            else:
+                carry = buf
+
+    # decodificar lo que quedó pendiente (con padding si hace falta)
+    if carry:
+        pad = "=" * (-len(carry) % 4)
+        try:
+            yield base64.b64decode(carry + pad, validate=False)
+        except Exception as e:
+            raise RuntimeError(f"Error Base64 (final): {e}")
 
 def generator_zip_bytes():
     """
-    Produce los bytes del ZIP como streaming:
-      partes (triple quotes) -> base64 decode -> XOR inverso (clave=123)
+    Aplica XOR por bloques y hace yield del ZIP final en streaming (RAM baja).
     """
-    b64_str = read_all_parts_b64()
-    try:
-        raw = base64.b64decode(b64_str)
-    except Exception as e:
-        raise RuntimeError(f"Error al decodificar Base64: {e}")
-
     key = XOR_KEY
-    view = memoryview(raw)
-    CHUNK = 256 * 1024  # 256 KiB por chunk para emitir seguido
-    for off in range(0, len(view), CHUNK):
-        block = bytearray(view[off:off+CHUNK])
+    for decoded in iter_b64_decoded_bytes():
+        block = bytearray(decoded)
         for j in range(len(block)):
             block[j] ^= key
         yield bytes(block)
@@ -112,10 +135,10 @@ def download_fullzip():
         "Cache-Control": "no-store, max-age=0",
         "Pragma": "no-cache",
         "Expires": "0",
-        "X-Accel-Buffering": "no",   # sugiere no bufferizar en proxies
+        "X-Accel-Buffering": "no",  # sugiere no bufferizar en proxies
     }
     return Response(stream_with_context(gen), headers=headers)
 
 if __name__ == "__main__":
-    # Solo para pruebas locales
+    # pruebas locales
     app.run(host="0.0.0.0", port=5000)
