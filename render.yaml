@@ -5,5 +5,5 @@ services:
     buildCommand: |
       pip install -r requirements.txt
     startCommand: |
-      gunicorn server.app:app --bind 0.0.0.0:$PORT --worker-class gevent --workers 1 --timeout 600 --graceful-timeout 30 --keep-alive 75
+      gunicorn server.app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 600 --graceful-timeout 30 --keep-alive 75 --max-requests 200 --max-requests-jitter 50
     autoDeploy: true
