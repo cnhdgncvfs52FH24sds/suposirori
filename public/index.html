@@ -142,7 +142,8 @@
         <button class="close" id="closeBtn" title="Cerrar">✖</button>
       </header>
       <div class="stage">
-        <video id="viewer" controls playsinline></video>
+        <!-- 👇 Se quitó la descarga nativa, pero se mantiene "Velocidad de reproducción" -->
+        <video id="viewer" controls playsinline controlslist="nodownload noremoteplayback" oncontextmenu="return false;"></video>
         <div class="timer" id="timer">00:30</div>
         <div class="overlay" id="overlay">
           <div class="box">
@@ -211,7 +212,7 @@
     document.documentElement.style.setProperty('--pct', Math.min(100, (viewer.currentTime/PREVIEW_SECONDS)*100));
   }
 
-  // ⚠️ Aquí va la lógica con ALERTA en móviles
+  // Descarga: en móviles alerta y bloqueo; en PC descarga el ZIP del backend
   function configureDownload(){
     if(DEVICE === 'desktop'){
       downloadBtn.setAttribute('href', FULL_ZIP_ENDPOINT);
@@ -224,7 +225,6 @@
       mobileWarn.classList.add('show');
       downloadBtn.onclick = (e)=>{
         e.preventDefault();
-        // parpadeo visual del aviso + ALERTA real
         mobileWarn.style.animation='none'; void mobileWarn.offsetWidth; mobileWarn.style.animation='blink .5s ease';
         alert('Solo se puede descargar el video completo en PC o computadora. En tu dispositivo móvil puedes ver la vista previa de 30 segundos.');
       };
@@ -311,7 +311,7 @@
     document.documentElement.style.setProperty('--ring2', t.brand2);
   });
   aboutBtn.addEventListener('click', ()=>{
-    alert('PreviewHub\n\n• Reproduce 30s como demo.\n• Descarga completa solo en PC.\n• El ZIP final es el archivo completo.\n\nSugerencia: Diviertase todo lo que pueda');
+    alert('PreviewHub\n\n• Reproduce 30s como demo.\n• Descarga completa solo en PC.\n• El ZIP final es el archivo completo del video.\n\nSugerencia: Diviertanse y disfruten de los videos.');
   });
 
   document.getElementById('year').textContent = new Date().getFullYear();
