@@ -1,8 +1,7 @@
-import re
-import base64
+import re, base64, os, tempfile
 from pathlib import Path
 from datetime import datetime
-from flask import Flask, send_from_directory, Response, jsonify, abort, stream_with_context
+from flask import Flask, send_from_directory, Response, jsonify, abort, stream_with_context, send_file, request
 
 # === Rutas base (relativas) ===
 BASE_DIR   = Path(__file__).resolve().parents[1]
@@ -14,16 +13,19 @@ PARTS_COUNT     = 10
 PART_PREFIX     = "payload_encoded_part_"
 PART_SUFFIX     = ".txt"
 FINAL_ZIP_NAME  = "anabel_y_marco_completo.zip"
-XOR_KEY         = 123  # clave XOR inversa
+XOR_KEY         = 123
 
-# Trozos: chars de Base64 a procesar por iteración (múltiplos de 4)
-B64_CHUNK_CHARS = 256 * 1024  # 256 KiB de texto base64 (~192 KiB binario por iteración)
+# Rendimiento
+B64_CHUNK_CHARS = 512 * 1024      # ↑ chunks más grandes => menos overhead
+CACHE_TO_TMP    = True            # ✅ cachear en /tmp tras la primera vez
+TMP_DIR         = Path(os.getenv("TMPDIR", "/tmp"))
 
 app = Flask(__name__, static_folder=None)
 
 # -------- Utilidades --------
 def ensure_dirs():
     PARTS_DIR.mkdir(parents=True, exist_ok=True)
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
 
 def parts_exist() -> bool:
     for i in range(1, PARTS_COUNT + 1):
@@ -32,30 +34,19 @@ def parts_exist() -> bool:
     return True
 
 def _extract_b64_block(text: str) -> str:
-    """
-    Extrae SOLO el contenido entre comillas triples:
-      ''' ... '''  o  \"\"\" ... \"\"\"
-    Si no hay comillas, devuelve el texto completo.
-    Elimina whitespace para dejar base64 limpio.
-    """
     triple_pat = re.compile(r"'''(.*?)'''|\"\"\"(.*?)\"\"\"", re.DOTALL)
     m = triple_pat.search(text)
     payload = (m.group(1) or m.group(2)) if m else text
     return re.sub(r"\s+", "", payload)
 
 def iter_b64_decoded_bytes():
-    """
-    Lee los 10 TXT secuencialmente y decodifica Base64 en streaming,
-    manejando el 'carry' para que cada decode sea múltiplo de 4.
-    Rinde bytes ya decodificados (AÚN sin XOR).
-    """
     ensure_dirs()
     if not parts_exist():
         missing = [f"{PART_PREFIX}{i}{PART_SUFFIX}" for i in range(1, PARTS_COUNT + 1)
                    if not (PARTS_DIR / f"{PART_PREFIX}{i}{PART_SUFFIX}").exists()]
         raise FileNotFoundError(f"Faltan partes: {missing}")
 
-    carry = ""  # restos de chars base64 que no forman múltiplo de 4
+    carry = ""
     for i in range(1, PARTS_COUNT + 1):
         p = PARTS_DIR / f"{PART_PREFIX}{i}{PART_SUFFIX}"
         text = p.read_text(encoding="utf-8", errors="ignore")
@@ -68,7 +59,7 @@ def iter_b64_decoded_bytes():
             pos += B64_CHUNK_CHARS
 
             buf = carry + chunk
-            usable_len = (len(buf) // 4) * 4   # mayor múltiplo de 4
+            usable_len = (len(buf) // 4) * 4
             if usable_len:
                 to_decode = buf[:usable_len]
                 carry     = buf[usable_len:]
@@ -79,7 +70,6 @@ def iter_b64_decoded_bytes():
             else:
                 carry = buf
 
-    # decodificar lo que quedó pendiente (con padding si hace falta)
     if carry:
         pad = "=" * (-len(carry) % 4)
         try:
@@ -88,15 +78,50 @@ def iter_b64_decoded_bytes():
             raise RuntimeError(f"Error Base64 (final): {e}")
 
 def generator_zip_bytes():
-    """
-    Aplica XOR por bloques y hace yield del ZIP final en streaming (RAM baja).
-    """
     key = XOR_KEY
     for decoded in iter_b64_decoded_bytes():
         block = bytearray(decoded)
         for j in range(len(block)):
             block[j] ^= key
         yield bytes(block)
+
+def cache_key_from_parts() -> str:
+    """Crea una firma simple por fechas+tamaños de las partes (para invalidar caché si cambian)."""
+    meta = []
+    for i in range(1, PARTS_COUNT + 1):
+        p = PARTS_DIR / f"{PART_PREFIX}{i}{PART_SUFFIX}"
+        st = p.stat()
+        meta.append(f"{p.name}:{st.st_size}:{int(st.st_mtime)}")
+    return str(abs(hash("|".join(meta))))
+
+def get_cached_zip_path() -> Path:
+    return TMP_DIR / f"{cache_key_from_parts()}_{FINAL_ZIP_NAME}"
+
+def build_cache_if_missing() -> Path:
+    """Construye el ZIP en /tmp si no existe. Escritura atómica."""
+    out_path = get_cached_zip_path()
+    if out_path.exists():
+        return out_path
+
+    # construir a archivo temporal y luego renombrar
+    with tempfile.NamedTemporaryFile(dir=TMP_DIR, delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+        try:
+            for decoded in iter_b64_decoded_bytes():
+                block = bytearray(decoded)
+                for j in range(len(block)):
+                    block[j] ^= XOR_KEY
+                tmp.write(block)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        except Exception:
+            try: tmp.close()
+            except: pass
+            try: tmp_path.unlink(missing_ok=True)
+            except: pass
+            raise
+    tmp_path.replace(out_path)
+    return out_path
 
 # -------- Frontend estático --------
 @app.get("/")
@@ -111,16 +136,44 @@ def assets(path: str):
 @app.get("/api/status")
 def status():
     ensure_dirs()
+    have_cache = get_cached_zip_path().exists() if CACHE_TO_TMP else False
     return jsonify({
         "server_time": datetime.utcnow().isoformat() + "Z",
         "parts_present": parts_exist(),
-        "zip_name": FINAL_ZIP_NAME
+        "zip_name": FINAL_ZIP_NAME,
+        "cached": have_cache
     })
 
-# -------- Descarga (streaming) --------
+# -------- Descarga --------
 @app.get("/api/download/fullzip")
-@app.get("/api/descargar/fullzip")  # alias en español
+@app.get("/api/descargar/fullzip")
 def download_fullzip():
+    ensure_dirs()
+    headers = {
+        "Content-Type": "application/zip",
+        "Content-Disposition": f'attachment; filename="{FINAL_ZIP_NAME}"',
+        "Cache-Control": "no-store, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "Content-Encoding": "identity",
+        "X-Accel-Buffering": "no",
+    }
+
+    if CACHE_TO_TMP:
+        try:
+            path = build_cache_if_missing()  # primera vez construye; luego sirve archivo
+        except FileNotFoundError as e:
+            abort(404, description=str(e))
+        except Exception as e:
+            abort(500, description=f"Error preparando caché: {e}")
+
+        # send_file con conditional=True permite Range/206 (reanudable) y usa file wrapper eficiente
+        resp = send_file(path, as_attachment=True, download_name=FINAL_ZIP_NAME, conditional=True)
+        for k, v in headers.items(): resp.headers.setdefault(k, v)
+        # ETag/Last-Modified los pone Flask automáticamente
+        return resp
+
+    # Fallback: streaming puro (sin cache)
     try:
         gen = generator_zip_bytes()
     except FileNotFoundError as e:
@@ -128,16 +181,7 @@ def download_fullzip():
     except Exception as e:
         abort(500, description=f"Error preparando descarga: {e}")
 
-    headers = {
-        "Content-Type": "application/zip",
-        "Content-Disposition": f'attachment; filename="{FINAL_ZIP_NAME}"',
-        "Cache-Control": "no-store, max-age=0",
-        "Pragma": "no-cache",
-        "Expires": "0",
-        "X-Accel-Buffering": "no",  # sugiere no bufferizar en proxies
-    }
     return Response(stream_with_context(gen), headers=headers)
 
 if __name__ == "__main__":
-    # pruebas locales
     app.run(host="0.0.0.0", port=5000)
