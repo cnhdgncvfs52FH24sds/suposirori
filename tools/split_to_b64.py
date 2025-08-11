@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, base64, textwrap
+import argparse, base64
 from pathlib import Path
 
 def main():
@@ -15,7 +15,7 @@ def main():
     b64 = base64.b64encode(src.read_bytes())  # bytes base64
     total = len(b64)
 
-    # Reparto alineado a múltiplos de 4 (para no cortar quadlets)
+    # Reparto alineado a múltiplos de 4
     base = (total // args.parts) // 4 * 4
     sizes = [base] * args.parts
     used = base * args.parts
@@ -29,7 +29,6 @@ def main():
     idx = 0
     for i, sz in enumerate(sizes, start=1):
         chunk = b64[idx:idx+sz]; idx += sz
-        # Envolver en líneas de 76 para legibilidad
         lines = [chunk[j:j+76].decode("ascii") for j in range(0, len(chunk), 76)]
         body = "\n".join(lines)
         out = out_dir / f"payload_encoded_part_{i}.txt"
