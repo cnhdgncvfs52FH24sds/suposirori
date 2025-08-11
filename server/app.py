@@ -17,8 +17,7 @@ FINAL_ZIP_NAME  = "anabel_y_marco_completo.zip"
 XOR_KEY         = 123  # clave XOR inversa
 
 # Trozos: chars de Base64 a procesar por iteración (múltiplos de 4)
-B64_CHUNK_CHARS = 256 * 1024  # 256 KiB de texto base64
-# Nota: el binario emitido por iteración será ~192 KiB aprox.
+B64_CHUNK_CHARS = 256 * 1024  # 256 KiB de texto base64 (~192 KiB binario por iteración)
 
 app = Flask(__name__, static_folder=None)
 
