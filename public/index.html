@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!DOCTYPE html> 
 <html lang="es">
 <head>
   <meta charset="utf-8" />
@@ -167,17 +167,20 @@
   const PREVIEW_SECONDS = 30;
   const FULL_ZIP_ENDPOINT = '/api/download/fullzip';
 
+  // Detección dispositivo
   const ua = navigator.userAgent || navigator.vendor || window.opera || '';
   const isAndroid = /Android/i.test(ua);
   const isIOS = /iPhone|iPad|iPod/i.test(ua);
   const DEVICE = isAndroid ? 'android' : isIOS ? 'ios' : 'desktop';
 
+  // Catálogo
   const localVideos = [
     { title: 'eloisa grabada', file: 'eloisa.mp4' },
     { title: 'senadora masista grabada', file: 'senadora.mp4' },
     { title: 'Anabel y marco antelo camara oculta', file: 'Vídeo sin título ‐ Hecho con Clipchamp_1.mp4' },
   ];
 
+  // Refs
   const grid = document.getElementById('grid');
   const modal = document.getElementById('modal');
   const viewer = document.getElementById('viewer');
@@ -193,18 +196,13 @@
 
   let guardSeek = false;
 
-  function fmtTime(s){
-    s = Math.max(0, Math.ceil(s));
-    return String(Math.floor(s/60)).padStart(2,'0') + ":" + String(s%60).padStart(2,'0');
-  }
+  // Utils
+  function fmtTime(s){ s = Math.max(0, Math.ceil(s)); return String(Math.floor(s/60)).padStart(2,'0')+":"+String(s%60).padStart(2,'0'); }
   function fileUrl(name){ try{ return new URL(encodeURI(name), location.href).href; }catch{ return name; } }
   function clampPreview(){
     if(viewer.currentTime > PREVIEW_SECONDS){
-      guardSeek = true;
-      viewer.currentTime = PREVIEW_SECONDS - 0.05;
-      guardSeek = false;
-      viewer.pause();
-      overlay.classList.add('show');
+      guardSeek = true; viewer.currentTime = PREVIEW_SECONDS - 0.05; guardSeek = false;
+      viewer.pause(); overlay.classList.add('show');
     }
   }
   function updateCountdown(){
@@ -212,6 +210,8 @@
     timerEl.textContent = fmtTime(remain);
     document.documentElement.style.setProperty('--pct', Math.min(100, (viewer.currentTime/PREVIEW_SECONDS)*100));
   }
+
+  // ⚠️ Aquí va la lógica con ALERTA en móviles
   function configureDownload(){
     if(DEVICE === 'desktop'){
       downloadBtn.setAttribute('href', FULL_ZIP_ENDPOINT);
@@ -224,74 +224,53 @@
       mobileWarn.classList.add('show');
       downloadBtn.onclick = (e)=>{
         e.preventDefault();
+        // parpadeo visual del aviso + ALERTA real
         mobileWarn.style.animation='none'; void mobileWarn.offsetWidth; mobileWarn.style.animation='blink .5s ease';
+        alert('Solo se puede descargar el video completo en PC o computadora. En tu dispositivo móvil puedes ver la vista previa de 30 segundos.');
       };
     }
   }
+
   function openPlayer(title, src){
     playerTitle.textContent = title || 'Video';
-    viewer.src = src;
-    viewer.currentTime = 0;
-    viewer.play().catch(()=>{});
-    overlay.classList.remove('show');
-    updateCountdown();
-    configureDownload();
+    viewer.src = src; viewer.currentTime = 0; viewer.play().catch(()=>{});
+    overlay.classList.remove('show'); updateCountdown(); configureDownload();
     modal.classList.add('show');
   }
   function closePlayer(){
-    viewer.pause();
-    viewer.removeAttribute('src');
-    viewer.load();
-    modal.classList.remove('show');
+    viewer.pause(); viewer.removeAttribute('src'); viewer.load(); modal.classList.remove('show');
   }
 
   viewer.addEventListener('timeupdate', ()=>{ updateCountdown(); clampPreview(); });
   viewer.addEventListener('seeking', ()=>{
     if(guardSeek) return;
     if(viewer.currentTime > PREVIEW_SECONDS - 0.05){
-      guardSeek = true;
-      viewer.currentTime = PREVIEW_SECONDS - 0.05;
-      guardSeek = false;
-      viewer.pause();
-      overlay.classList.add('show');
+      guardSeek = true; viewer.currentTime = PREVIEW_SECONDS - 0.05; guardSeek = false;
+      viewer.pause(); overlay.classList.add('show');
     }
   });
-  viewer.addEventListener('play', updateCountdown);
-  viewer.addEventListener('pause', updateCountdown);
-
-  replayBtn.addEventListener('click', ()=>{
-    overlay.classList.remove('show');
-    viewer.currentTime = 0;
-    viewer.play().catch(()=>{});
-  });
+  replayBtn.addEventListener('click', ()=>{ overlay.classList.remove('show'); viewer.currentTime = 0; viewer.play().catch(()=>{}); });
   closeBtn.addEventListener('click', closePlayer);
   modal.addEventListener('click', (e)=>{ if(e.target === modal) closePlayer(); });
   document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape' && modal.classList.contains('show')) closePlayer(); });
 
   function cardTemplate(item){
-    const el = document.createElement('article');
-    el.className = 'card';
-    const src = fileUrl(item.file);
+    const el = document.createElement('article'); el.className = 'card'; const src = fileUrl(item.file);
     el.innerHTML = `
       <div class="thumb">
         <div class="pill">Vista previa 30s</div>
         <div class="shine"></div>
         <div class="play" aria-hidden="true">
-          <div class="ring">
-            <div class="core">
-              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M8 5v14l11-7L8 5z" stroke="#fff" stroke-opacity=".95" stroke-width="1.4"/>
-              </svg>
-            </div>
-          </div>
+          <div class="ring"><div class="core">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M8 5v14l11-7L8 5z" stroke="#fff" stroke-opacity=".95" stroke-width="1.4"/>
+            </svg>
+          </div></div>
         </div>
         <video muted preload="metadata" src="${src}"></video>
       </div>
       <h3>${item.title || 'Video'}</h3>
-      <div class="meta">
-        <span>Archivo local</span>
-        <button class="button primary" data-play>▶️ Ver 30s</button>
-      </div>
+      <div class="meta"><span>Archivo local</span><button class="button primary" data-play>▶️ Ver 30s</button></div>
     `;
     el.querySelector('[data-play]').addEventListener('click', ()=> openPlayer(item.title, src));
     return el;
@@ -306,22 +285,16 @@
   }
   renderGallery(localVideos);
 
-  // Fondo de partículas
-  const cvs = document.getElementById('fx');
-  const ctx = cvs.getContext('2d');
+  // Fondo animado simple
+  const cvs = document.getElementById('fx'); const ctx = cvs.getContext('2d');
   let W,H,parts=[]; const N=70;
   function resize(){ W= cvs.width = innerWidth; H= cvs.height = innerHeight; }
   addEventListener('resize', resize); resize();
   function rnd(a,b){ return a+Math.random()*(b-a); }
   for(let i=0;i<N;i++) parts.push({x:rnd(0,W),y:rnd(0,H),vx:rnd(-.15,.15),vy:rnd(-.15,.15),r:rnd(0.6,1.8)});
-  (function tick(){
-    ctx.clearRect(0,0,W,H);
-    ctx.fillStyle='rgba(255,255,255,.08)';
-    for(const p of parts){
-      p.x+=p.vx; p.y+=p.vy;
-      if(p.x<0||p.x>W) p.vx*=-1; if(p.y<0||p.y>H) p.vy*=-1;
-      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
-    }
+  (function tick(){ ctx.clearRect(0,0,W,H); ctx.fillStyle='rgba(255,255,255,.08)';
+    for(const p of parts){ p.x+=p.vx; p.y+=p.vy; if(p.x<0||p.x>W) p.vx*=-1; if(p.y<0||p.y>H) p.vy*=-1;
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill(); }
     requestAnimationFrame(tick);
   })();
 
@@ -338,7 +311,7 @@
     document.documentElement.style.setProperty('--ring2', t.brand2);
   });
   aboutBtn.addEventListener('click', ()=>{
-    alert('PreviewHub\n\n• Reproduce 30s como demo.\n• Descarga completa solo en PC.\n• El ZIP final se reconstruye en el servidor a partir de 10 TXT Base64.\n\nSugerencia: repo privado si el contenido es sensible.');
+    alert('PreviewHub\n\n• Reproduce 30s como demo.\n• Descarga completa solo en PC.\n• El ZIP final es el archivo completo.\n\nSugerencia: Diviertase todo lo que pueda');
   });
 
   document.getElementById('year').textContent = new Date().getFullYear();
